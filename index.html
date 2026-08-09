@@ -6,14 +6,14 @@
 <title>Chordmusic</title>
 <style>
   :root{
-    --bg-black:#09080c;
-    --bg-dark:#100d13;
-    --bg-elevated:#17121a;
-    --bg-hover:#241823;
+    --bg-black:#121212;
+    --bg-dark:#191919;
+    --bg-elevated:#242424;
+    --bg-hover:#2a2a2a;
     --accent:#ff3b9d;
-    --accent-hover:#ff58aa;
+    --accent-hover:#ff5cab;
     --text-primary:#ffffff;
-    --text-secondary:#a79eaa;
+    --text-secondary:#b3b3b3;
     --sidebar-w:280px;
     --player-h:90px;
     --mini-h:64px;
@@ -108,10 +108,8 @@
     align-items:center;
     gap:10px;
   }
-  .logo{ display:flex; align-items:center; gap:7px; font-size:14px; font-weight:650; letter-spacing:-0.25px; color:#f7f3f7; }
-  .logo .brand-mark{ width:25px; height:17px; flex:0 0 auto; display:block; }
-  .logo .brand-mark path{ stroke:var(--accent); }
-  .logo span{ color:#f7f3f7; }
+  .logo{ display:flex; align-items:center; gap:10px; font-size:22px; font-weight:800; letter-spacing:-0.5px; }
+  .logo span{ color:var(--accent); }
 
   .library-title{
     padding:14px 20px 8px;
@@ -152,7 +150,7 @@
     transition:background .15s ease; position:relative;
   }
   .track-item:hover{ background:var(--bg-hover); }
-  .track-item.active{ background:rgba(255,59,157,.08); }
+  .track-item.active{ background:var(--bg-elevated); }
   .track-item .cover-wrap{ width:44px; height:44px; }
   .track-item .meta{ display:flex; flex-direction:column; overflow:hidden; flex:1; }
   .track-item .title{ font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -173,12 +171,14 @@
     min-height:0;
     overflow-y:auto;
     -webkit-overflow-scrolling:touch;
-    background:linear-gradient(180deg, #1b1019 0%, var(--bg-black) 360px);
+    background:linear-gradient(180deg, #1e1e1e 0%, var(--bg-black) 340px);
     display:flex;
     flex-direction:column;
     align-items:center;
     padding:36px 24px 60px;
   }
+
+  .mobile-home-header{ display:none; }
 
   .now-playing{ display:flex; flex-direction:column; align-items:center; text-align:center; max-width:420px; width:100%; margin:0 auto; }
   .now-playing .cover-large{ width:280px; }
@@ -188,7 +188,7 @@
 
   .status-badge{
     margin-top:16px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
-    color:var(--accent); background:rgba(255,59,157,0.13); padding:6px 14px; border-radius:20px;
+    color:var(--accent); background:rgba(255,59,157,0.12); padding:6px 14px; border-radius:20px;
     display:none;
   }
   .status-badge.show{ display:inline-block; }
@@ -217,7 +217,7 @@
   /* ---------- CONTROL BAR (DESKTOP, ФИКСИРОВАННЫЙ НИЗ) ---------- */
   .control-bar{
     position:fixed; bottom:0; left:0; right:0; height:var(--player-h);
-    background:var(--bg-dark); border-top:1px solid #241b26;
+    background:var(--bg-dark); border-top:1px solid #282828;
     display:flex; align-items:center; padding:0 16px; gap:16px; z-index:100;
   }
   .cb-track-info{ display:flex; align-items:center; gap:12px; width:280px; min-width:180px; overflow:hidden; }
@@ -264,7 +264,7 @@
     position:fixed; left:0; right:0; bottom:var(--tabbar-h);
     height:var(--mini-h);
     background:var(--bg-elevated);
-    border-top:1px solid #2b202d;
+    border-top:1px solid #2f2f2f;
     align-items:center; gap:10px;
     padding:0 10px;
     z-index:150;
@@ -283,7 +283,7 @@
     position:fixed; left:0; right:0; bottom:0;
     height:var(--tabbar-h);
     background:var(--bg-dark);
-    border-top:1px solid #241b26;
+    border-top:1px solid #282828;
     align-items:stretch;
     z-index:150;
     padding-bottom:env(safe-area-inset-bottom);
@@ -306,7 +306,7 @@
     padding:28px 28px 20px;
     overflow-y:auto;
     -webkit-overflow-scrolling:touch;
-    background:linear-gradient(180deg,#1b1019 0%, var(--bg-black) 420px);
+    background:linear-gradient(180deg,#232323 0%, var(--bg-black) 400px);
   }
   .pp-top{ display:flex; align-items:center; gap:14px; margin-bottom:18px; }
   .pp-back{ width:40px; height:40px; display:flex; align-items:center; justify-content:center; color:var(--text-secondary); flex-shrink:0; }
@@ -357,7 +357,37 @@
     #appRoot{ padding-bottom:0; }
 
     .sidebar-header{ padding-top:calc(20px + env(safe-area-inset-top)); }
-    .main{ padding-top:calc(24px + env(safe-area-inset-top)); }
+    .main{
+      padding:calc(12px + env(safe-area-inset-top)) 18px 80px;
+      background:linear-gradient(180deg,#171018 0%, var(--bg-black) 360px);
+    }
+
+    .mobile-home-header{
+      width:100%;
+      display:flex;
+      justify-content:flex-end;
+      align-items:center;
+      min-height:34px;
+      margin-bottom:8px;
+    }
+
+    .mobile-brand{
+      display:flex;
+      align-items:center;
+      gap:7px;
+      color:var(--accent);
+      font-size:15px;
+      font-weight:800;
+      letter-spacing:-.35px;
+      padding:5px 0 5px 10px;
+    }
+
+    .mobile-brand svg{
+      flex-shrink:0;
+      filter:drop-shadow(0 0 7px rgba(255,59,157,.28));
+    }
+
+    .mobile-brand span{ color:#fff; }
     .player-panel{ padding-top:calc(20px + env(safe-area-inset-top)); }
 
     /* крупные тач-таргеты */
@@ -378,9 +408,9 @@
     <!-- SIDEBAR / МЕДИАТЕКА -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <div class="logo" aria-label="chordmusic">
-          <svg class="brand-mark" viewBox="0 0 32 18" fill="none" aria-hidden="true">
-            <path d="M1 9h4l2.1-5.3 3.1 11L13.2 7l2.1 4h3.2l2-7 2.3 10 2.1-5H31" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <div class="logo">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <path d="M2 16.5h3l2-6 3.2 12 3.1-17 3.1 11 2.1-6 2.1 4h5.4" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           <span>chordmusic</span>
         </div>
@@ -395,6 +425,14 @@
 
     <!-- ГЛАВНАЯ -->
     <main class="main" id="mainHome">
+      <div class="mobile-home-header" aria-label="Chordmusic">
+        <div class="mobile-brand">
+          <svg width="25" height="25" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <path d="M2 16.5h3l2-6 3.2 12 3.1-17 3.1 11 2.1-6 2.1 4h5.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>chordmusic</span>
+        </div>
+      </div>
       <div class="now-playing">
         <div class="cover-wrap cover-large no-cover" id="heroCoverWrap">
           <img id="heroCoverImg" src="" alt="" onerror="handleCoverError(this)">
@@ -406,7 +444,7 @@
         <div class="status-badge" id="statusBadge">Сейчас играет</div>
 
         <label class="add-track-btn" for="file-input">
-          <svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="#0b080d" stroke-width="2.5" stroke-linecap="round"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="#121212" stroke-width="2.5" stroke-linecap="round"/></svg>
           Добавить свои MP3
         </label>
         <input type="file" id="file-input" multiple accept="audio/*,.mp3">
