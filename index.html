@@ -297,6 +297,32 @@
   .tab-btn.active svg{ stroke:var(--accent); }
   .tab-btn svg{ transition:stroke .15s ease; }
 
+  /* ---------- SOUNDCLOUD IMPORT ---------- */
+  .soundcloud-import{
+    width:min(520px,100%);
+    margin:14px auto 0;
+    display:flex;
+    gap:8px;
+    padding:6px;
+    border:1px solid rgba(255,59,157,.18);
+    background:rgba(255,255,255,.035);
+    border-radius:14px;
+    box-sizing:border-box;
+  }
+  .soundcloud-import input{
+    min-width:0; flex:1; border:0; outline:0; background:transparent;
+    color:var(--text-primary); padding:10px 10px; font:inherit; font-size:13px;
+  }
+  .soundcloud-import input::placeholder{color:var(--text-secondary)}
+  .soundcloud-import button{
+    border:0; border-radius:10px; padding:0 14px; cursor:pointer;
+    background:var(--accent); color:#fff; font-weight:800; font-size:12px;
+  }
+  .soundcloud-import button:active{transform:scale(.97)}
+  .soundcloud-import-status{font-size:11px;color:var(--text-secondary);margin:8px auto 0;max-width:520px;text-align:center;min-height:16px}
+  .soundcloud-widget-host{position:fixed;left:-20px;bottom:-20px;width:2px;height:2px;opacity:.01;pointer-events:none;overflow:hidden}
+  .soundcloud-widget-host iframe{width:2px;height:2px;border:0}
+
   /* ---------- MOBILE PLAYER PANEL (полноэкранный) ---------- */
   .player-panel{
     display:none;
@@ -448,6 +474,14 @@
           Добавить свои MP3
         </label>
         <input type="file" id="file-input" multiple accept="audio/*,.mp3">
+
+        <div class="soundcloud-import" aria-label="Импорт трека из SoundCloud">
+          <input id="soundcloudUrlInput" type="url" inputmode="url"
+                 placeholder="Вставь ссылку SoundCloud…"
+                 autocomplete="off" spellcheck="false">
+          <button id="soundcloudLoadBtn" type="button">Загрузить</button>
+        </div>
+        <div class="soundcloud-import-status" id="soundcloudStatus"></div>
       </div>
 
       <h2 class="home-section-title" id="homeGridTitle" style="display:none;">Плейлисты</h2>
@@ -594,6 +628,8 @@
 </div>
 
 <audio id="audio" preload="metadata" playsinline></audio>
+<div class="soundcloud-widget-host" id="soundcloudWidgetHost" aria-hidden="true"></div>
+<script src="https://w.soundcloud.com/player/api.js"></script>
 
 <script>
 (function(){
@@ -1006,17 +1042,25 @@ const MUSIC_LIBRARY = [
 
     setIOSMediaAction('seekbackward', (details) => {
       const offset = Number(details && details.seekOffset) || 10;
-      audio.currentTime = Math.max(0, audio.currentTime - offset);
-      updateIOSMediaPosition();
+      if(soundCloudMode && soundCloudWidget && soundCloudReady){
+        soundCloudWidget.getPosition(function(ms){ soundCloudWidget.seekTo(Math.max(0, ms - offset * 1000)); });
+      } else {
+        audio.currentTime = Math.max(0, audio.currentTime - offset);
+        updateIOSMediaPosition();
+      }
     });
 
     setIOSMediaAction('seekforward', (details) => {
       const offset = Number(details && details.seekOffset) || 10;
       const duration = Number(audio.duration);
-      audio.currentTime = Number.isFinite(duration) && duration > 0
-        ? Math.min(duration, audio.currentTime + offset)
-        : audio.currentTime + offset;
-      updateIOSMediaPosition();
+      if(soundCloudMode && soundCloudWidget && soundCloudReady){
+        soundCloudWidget.getPosition(function(ms){ soundCloudWidget.getDuration(function(total){ soundCloudWidget.seekTo(Math.min(total || Infinity, ms + offset * 1000)); }); });
+      } else {
+        audio.currentTime = Number.isFinite(duration) && duration > 0
+          ? Math.min(duration, audio.currentTime + offset)
+          : audio.currentTime + offset;
+        updateIOSMediaPosition();
+      }
     });
 
     setIOSMediaAction('seekto', (details) => {
@@ -1029,8 +1073,8 @@ const MUSIC_LIBRARY = [
         target = Math.min(duration, target);
       }
 
-      audio.currentTime = target;
-      updateIOSMediaPosition();
+      if(soundCloudMode && soundCloudWidget && soundCloudReady) soundCloudWidget.seekTo(target * 1000);
+      else { audio.currentTime = target; updateIOSMediaPosition(); }
     });
   }
 
@@ -1067,6 +1111,19 @@ const MUSIC_LIBRARY = [
 
   /* ======================= DOM ======================= */
   const audio = document.getElementById('audio');
+
+  // SoundCloud: ссылка превращается в официальный SoundCloud Widget,
+  // а существующий интерфейс Chordmusic управляет им через Widget API.
+  let soundCloudMode = false;
+  let soundCloudWidget = null;
+  let soundCloudReady = false;
+  let soundCloudTrack = null;
+  let soundCloudUrl = '';
+
+  const soundcloudUrlInput = document.getElementById('soundcloudUrlInput');
+  const soundcloudLoadBtn = document.getElementById('soundcloudLoadBtn');
+  const soundcloudStatus = document.getElementById('soundcloudStatus');
+  const soundcloudWidgetHost = document.getElementById('soundcloudWidgetHost');
 
   const libraryPanelBody = document.getElementById('libraryPanelBody');
   const libraryHeaderEl = document.getElementById('libraryHeader'); // стабильный контейнер — сам никогда не заменяется
@@ -1288,8 +1345,152 @@ const MUSIC_LIBRARY = [
     });
   }
 
+  /* ======================= SOUNDCLOUD ======================= */
+  function isSoundCloudUrl(value){
+    try{
+      const u = new URL(value);
+      return /(^|\.)soundcloud\.com$/i.test(u.hostname) || /(^|\.)on\.soundcloud\.com$/i.test(u.hostname);
+    }catch(e){ return false; }
+  }
+
+  function setSoundCloudStatus(text, isError=false){
+    soundcloudStatus.textContent = text || '';
+    soundcloudStatus.style.color = isError ? '#ff6b9f' : '';
+  }
+
+  function destroySoundCloudWidget(){
+    soundCloudReady = false;
+    soundCloudTrack = null;
+    soundCloudWidget = null;
+    soundCloudMode = false;
+    soundcloudWidgetHost.innerHTML = '';
+  }
+
+  function updateSoundCloudPosition(positionMs, durationMs){
+    const duration = Number(durationMs) / 1000;
+    const position = Number(positionMs) / 1000;
+    if(!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
+    const pct = Math.min(100, Math.max(0, position / duration * 100));
+    progressFill.style.width = pct + '%';
+    progressThumb.style.left = pct + '%';
+    ppProgressFill.style.width = pct + '%';
+    ppProgressThumb.style.left = pct + '%';
+    miniProgress.style.width = pct + '%';
+    currentTimeEl.textContent = formatTime(position);
+    ppCurrentTime.textContent = formatTime(position);
+    durationTimeEl.textContent = formatTime(duration);
+    ppDurationTime.textContent = formatTime(duration);
+    updateIOSMediaPositionForValues(position, duration);
+  }
+
+  function updateIOSMediaPositionForValues(position, duration){
+    if(!hasIOSMediaSession() || !Number.isFinite(duration) || duration <= 0) return;
+    try{
+      if(typeof navigator.mediaSession.setPositionState === 'function'){
+        navigator.mediaSession.setPositionState({duration, playbackRate:1, position:Math.min(position,duration)});
+      }
+    }catch(e){}
+  }
+
+  function updateSoundCloudMetadata(sound){
+    if(!sound) return;
+    soundCloudTrack = sound;
+    const title = String(sound.title || 'SoundCloud track');
+    const artist = String(sound.user && sound.user.username || 'SoundCloud');
+    let artwork = sound.artwork_url || sound.user?.avatar_url || '';
+    if(artwork) artwork = artwork.replace('-large.', '-t500x500.').replace('-large', '-t500x500');
+
+    setCoverEverywhere(artwork || '');
+    setTextEverywhere(title, artist, 'SoundCloud');
+    document.body.classList.add('has-track');
+    if(hasIOSMediaSession()){
+      try{
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title, artist, album:'SoundCloud',
+          artwork: artwork ? [{src:artwork, sizes:'500x500', type:'image/jpeg'}] : []
+        });
+      }catch(e){}
+    }
+  }
+
+  function setupSoundCloudWidget(url, autoplay=true){
+    if(!window.SC || !SC.Widget){
+      setSoundCloudStatus('SoundCloud API не загрузился. Проверь интернет.', true);
+      return;
+    }
+
+    destroySoundCloudWidget();
+    soundCloudMode = true;
+    soundCloudUrl = url;
+    setSoundCloudStatus('Подключаю трек…');
+
+    const iframe = document.createElement('iframe');
+    iframe.allow = 'autoplay';
+    iframe.setAttribute('scrolling','no');
+    iframe.setAttribute('frameborder','no');
+    iframe.src = 'https://w.soundcloud.com/player/?url=' + encodeURIComponent(url) +
+      '&auto_play=false&hide_related=true&show_comments=false&show_user=true&show_reposts=false&show_teaser=false&visual=false&color=ff3b9d';
+    soundcloudWidgetHost.appendChild(iframe);
+
+    soundCloudWidget = SC.Widget(iframe);
+
+    soundCloudWidget.bind(SC.Widget.Events.READY, function(){
+      soundCloudReady = true;
+      setSoundCloudStatus('');
+      soundCloudWidget.getCurrentSound(function(sound){
+        updateSoundCloudMetadata(sound);
+        if(autoplay) soundCloudWidget.play();
+      });
+    });
+
+    soundCloudWidget.bind(SC.Widget.Events.PLAY, function(){
+      isPlaying = true;
+      setIOSPlaybackState('playing');
+      updatePlayUI();
+      setSoundCloudStatus('');
+    });
+
+    soundCloudWidget.bind(SC.Widget.Events.PAUSE, function(){
+      isPlaying = false;
+      setIOSPlaybackState('paused');
+      updatePlayUI();
+    });
+
+    soundCloudWidget.bind(SC.Widget.Events.PLAY_PROGRESS, function(data){
+      updateSoundCloudPosition(data.currentPosition, data.duration);
+    });
+
+    soundCloudWidget.bind(SC.Widget.Events.FINISH, function(){
+      isPlaying = false;
+      setIOSPlaybackState('paused');
+      updatePlayUI();
+      if(repeatMode === 2){ soundCloudWidget.seekTo(0); soundCloudWidget.play(); }
+    });
+
+    soundCloudWidget.bind(SC.Widget.Events.ERROR, function(){
+      isPlaying = false;
+      updatePlayUI();
+      setSoundCloudStatus('SoundCloud не может воспроизвести этот трек.', true);
+    });
+  }
+
+  function loadSoundCloudFromInput(){
+    const url = soundcloudUrlInput.value.trim();
+    if(!isSoundCloudUrl(url)){
+      setSoundCloudStatus('Вставь обычную ссылку на трек SoundCloud.', true);
+      return;
+    }
+    setupSoundCloudWidget(url, true);
+  }
+
+  soundcloudLoadBtn.addEventListener('click', loadSoundCloudFromInput);
+  soundcloudUrlInput.addEventListener('keydown', e => {
+    if(e.key === 'Enter') loadSoundCloudFromInput();
+  });
+
   /* ======================= ВОСПРОИЗВЕДЕНИЕ ======================= */
   function playTrackInPlaylist(playlistId, index){
+    if(soundCloudMode) destroySoundCloudWidget();
     const pl = getPlaylistById(playlistId);
     if(!pl || !pl.tracks[index]) return;
     currentPlaylistId = playlistId;
@@ -1360,6 +1561,10 @@ const MUSIC_LIBRARY = [
   }
 
   function playAudio(){
+    if(soundCloudMode && soundCloudWidget && soundCloudReady){
+      soundCloudWidget.play();
+      return;
+    }
     if(!audio.src) return;
 
     const p = audio.play();
@@ -1379,13 +1584,21 @@ const MUSIC_LIBRARY = [
   }
 
   function pauseAudio(){
+    if(soundCloudMode && soundCloudWidget && soundCloudReady){
+      soundCloudWidget.pause();
+      return;
+    }
     audio.pause();
     isPlaying = false;
     setIOSPlaybackState('paused');
     updateIOSMediaPosition();
     updatePlayUI();
   }
-  function togglePlay(){ if(!audio.src) return; isPlaying ? pauseAudio() : playAudio(); }
+  function togglePlay(){
+    if(soundCloudMode){ isPlaying ? pauseAudio() : playAudio(); return; }
+    if(!audio.src) return;
+    isPlaying ? pauseAudio() : playAudio();
+  }
 
   function updatePlayUI(){
     [playIcon, miniPlayIcon, ppPlayIcon].forEach(icon => {
@@ -1409,6 +1622,12 @@ const MUSIC_LIBRARY = [
   }
 
   function playNext(userTriggered){
+    if(soundCloudMode){
+      if(soundCloudWidget && soundCloudReady && userTriggered){
+        setSoundCloudStatus('Для ссылки SoundCloud доступен один трек.');
+      }
+      return;
+    }
     const queue = getCurrentQueue();
     if(queue.length === 0) return;
     let nextIndex;
@@ -1433,6 +1652,10 @@ const MUSIC_LIBRARY = [
   }
 
   function playPrev(){
+    if(soundCloudMode){
+      if(soundCloudWidget && soundCloudReady){ soundCloudWidget.seekTo(0); soundCloudWidget.play(); }
+      return;
+    }
     const queue = getCurrentQueue();
     if(queue.length === 0) return;
     if(audio.currentTime > 3){ audio.currentTime = 0; return; }
@@ -1494,7 +1717,14 @@ const MUSIC_LIBRARY = [
       const rect = trackEl.getBoundingClientRect();
       let pct = (clientX - rect.left) / rect.width;
       pct = Math.min(1, Math.max(0, pct));
-      if(audio.duration) audio.currentTime = pct * audio.duration;
+      if(soundCloudMode && soundCloudWidget && soundCloudReady){
+        const durationMs = Number(audio.duration) * 1000;
+        soundCloudWidget.getDuration(function(ms){
+          if(Number.isFinite(ms) && ms > 0) soundCloudWidget.seekTo(pct * ms);
+        });
+      } else if(audio.duration) {
+        audio.currentTime = pct * audio.duration;
+      }
       fillEl.style.width = (pct*100)+'%'; thumbEl.style.left = (pct*100)+'%';
       curEl.textContent = formatTime(pct * (audio.duration || 0));
       // синхронизируем вторую полосу прогресса (десктоп/мобайл)
@@ -1529,7 +1759,9 @@ const MUSIC_LIBRARY = [
     const rect = volumeTrack.getBoundingClientRect();
     let pct = (clientX - rect.left) / rect.width;
     pct = Math.min(1, Math.max(0, pct));
-    audio.volume = pct; lastVolume = pct;
+    if(soundCloudMode && soundCloudWidget && soundCloudReady) soundCloudWidget.setVolume(pct * 100);
+    else audio.volume = pct;
+    lastVolume = pct;
     setVolumeUI(pct); updateVolumeIcon(pct);
   }
   let isSeekingVolume = false;
@@ -1549,8 +1781,15 @@ const MUSIC_LIBRARY = [
   let isMuted = false;
   volIcon.addEventListener('click', () => {
     isMuted = !isMuted;
-    if(isMuted){ audio.volume = 0; setVolumeUI(0); updateVolumeIcon(0); }
-    else { audio.volume = lastVolume; setVolumeUI(lastVolume); updateVolumeIcon(lastVolume); }
+    if(isMuted){
+      if(soundCloudMode && soundCloudWidget && soundCloudReady) soundCloudWidget.setVolume(0);
+      else audio.volume = 0;
+      setVolumeUI(0); updateVolumeIcon(0);
+    } else {
+      if(soundCloudMode && soundCloudWidget && soundCloudReady) soundCloudWidget.setVolume(lastVolume * 100);
+      else audio.volume = lastVolume;
+      setVolumeUI(lastVolume); updateVolumeIcon(lastVolume);
+    }
   });
 
   /* ======================= КНОПКИ УПРАВЛЕНИЯ (десктоп + мобайл) ======================= */
