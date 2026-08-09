@@ -830,9 +830,173 @@ const MUSIC_LIBRARY = [
     const curPl = getPlaylistById(currentPlaylistId);
     if(!curPl || curPl.id !== pl.id) return;
     if(curPl.tracks[currentIndex] !== track) return;
+
     setCoverEverywhere(trackCover(track, curPl));
     setTextEverywhere(track.title, track.artist, curPl.playlistName);
+
+    // ID3-обложка/название могли загрузиться уже после начала воспроизведения.
+    updateIOSMediaSession(track, curPl);
   }
+
+  /* ======================= iOS / SAFARI MEDIA SESSION ======================= */
+  // Полностью синхронизирует Chordmusic с системным плеером iOS:
+  // экран блокировки, Control Center, AirPods и Bluetooth-кнопки.
+  const IOS_MEDIA_ACTIONS = [
+    'play', 'pause', 'previoustrack', 'nexttrack',
+    'seekbackward', 'seekforward', 'seekto'
+  ];
+
+  function hasIOSMediaSession(){
+    return typeof navigator !== 'undefined' &&
+           'mediaSession' in navigator &&
+           typeof window !== 'undefined';
+  }
+
+  function mediaArtworkType(src){
+    if(!src || typeof src !== 'string') return undefined;
+
+    // Для встроенной APIC-картинки MIME уже лежит в data URL.
+    const dataMatch = src.match(/^data:([^;,]+)[;,]/i);
+    if(dataMatch) return dataMatch[1];
+
+    const clean = src.split('?')[0].split('#')[0].toLowerCase();
+    if(clean.endsWith('.png')) return 'image/png';
+    if(clean.endsWith('.webp')) return 'image/webp';
+    if(clean.endsWith('.gif')) return 'image/gif';
+    if(clean.endsWith('.jpg') || clean.endsWith('.jpeg')) return 'image/jpeg';
+    return undefined;
+  }
+
+  function updateIOSMediaSession(track, pl){
+    if(!hasIOSMediaSession() || !track) return;
+
+    const title = String(track.title || 'Без названия');
+    const artist = String(track.artist || 'Неизвестный исполнитель');
+    const album = String((pl && pl.playlistName) || 'Chordmusic');
+    const artwork = trackCover(track, pl);
+
+    try {
+      const artworkItems = artwork ? [{
+        src: artwork,
+        sizes: '512x512',
+        ...(mediaArtworkType(artwork) ? { type: mediaArtworkType(artwork) } : {})
+      }] : [];
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title,
+        artist,
+        album,
+        artwork: artworkItems
+      });
+    } catch(err) {
+      console.warn('Не удалось обновить Media Session metadata:', err);
+    }
+  }
+
+  function clearIOSMediaSession(){
+    if(!hasIOSMediaSession()) return;
+
+    try {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
+    } catch(err) {
+      console.warn('Не удалось очистить Media Session:', err);
+    }
+  }
+
+  function updateIOSMediaPosition(){
+    if(!hasIOSMediaSession()) return;
+
+    const duration = Number(audio.duration);
+    const position = Number(audio.currentTime);
+    const rate = Number(audio.playbackRate) || 1;
+
+    // Safari бросает исключение, если duration/position невалидны.
+    if(!Number.isFinite(duration) || duration <= 0) return;
+    if(!Number.isFinite(position) || position < 0) return;
+
+    const safePosition = Math.min(position, duration);
+
+    try {
+      if(typeof navigator.mediaSession.setPositionState === 'function'){
+        navigator.mediaSession.setPositionState({
+          duration,
+          playbackRate: rate,
+          position: safePosition
+        });
+      }
+    } catch(err) {
+      // Старые версии Safari могут не поддерживать setPositionState.
+    }
+  }
+
+  function setIOSPlaybackState(state){
+    if(!hasIOSMediaSession()) return;
+    try {
+      navigator.mediaSession.playbackState = state;
+    } catch(err) {}
+  }
+
+  function setIOSMediaAction(action, handler){
+    if(!hasIOSMediaSession() || typeof navigator.mediaSession.setActionHandler !== 'function') return;
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch(err) {
+      // Конкретная версия Safari может не поддерживать отдельный action.
+    }
+  }
+
+  function setupIOSMediaSession(){
+    if(!hasIOSMediaSession()) return;
+
+    setIOSMediaAction('play', () => {
+      playAudio();
+    });
+
+    setIOSMediaAction('pause', () => {
+      pauseAudio();
+    });
+
+    setIOSMediaAction('previoustrack', () => {
+      playPrev();
+    });
+
+    setIOSMediaAction('nexttrack', () => {
+      playNext(true);
+    });
+
+    setIOSMediaAction('seekbackward', (details) => {
+      const offset = Number(details && details.seekOffset) || 10;
+      audio.currentTime = Math.max(0, audio.currentTime - offset);
+      updateIOSMediaPosition();
+    });
+
+    setIOSMediaAction('seekforward', (details) => {
+      const offset = Number(details && details.seekOffset) || 10;
+      const duration = Number(audio.duration);
+      audio.currentTime = Number.isFinite(duration) && duration > 0
+        ? Math.min(duration, audio.currentTime + offset)
+        : audio.currentTime + offset;
+      updateIOSMediaPosition();
+    });
+
+    setIOSMediaAction('seekto', (details) => {
+      if(!details || !Number.isFinite(Number(details.seekTime))) return;
+
+      const duration = Number(audio.duration);
+      let target = Math.max(0, Number(details.seekTime));
+
+      if(Number.isFinite(duration) && duration > 0){
+        target = Math.min(duration, target);
+      }
+
+      audio.currentTime = target;
+      updateIOSMediaPosition();
+    });
+  }
+
+  // Инициализируем один раз при загрузке страницы.
+  setupIOSMediaSession();
 
   /** Обложка трека: своя, если есть, иначе обложка плейлиста. */
   function trackCover(track, pl){
@@ -1108,6 +1272,9 @@ const MUSIC_LIBRARY = [
     setCoverEverywhere(trackCover(track, pl));
     setTextEverywhere(track.title, track.artist, pl.playlistName);
 
+    // Системный плеер iOS получает реальные title/artist/album/artwork.
+    updateIOSMediaSession(track, pl);
+
     renderLibraryPanel();
     resetProgressEverywhere();
   }
@@ -1155,15 +1322,30 @@ const MUSIC_LIBRARY = [
 
   function playAudio(){
     if(!audio.src) return;
+
     const p = audio.play();
     if(p && p.then){
-      p.then(() => { isPlaying = true; updatePlayUI(); })
-       .catch(err => console.warn('Не удалось воспроизвести:', err));
+      p.then(() => {
+        isPlaying = true;
+        setIOSPlaybackState('playing');
+        updateIOSMediaPosition();
+        updatePlayUI();
+      }).catch(err => console.warn('Не удалось воспроизвести:', err));
     } else {
-      isPlaying = true; updatePlayUI();
+      isPlaying = true;
+      setIOSPlaybackState('playing');
+      updateIOSMediaPosition();
+      updatePlayUI();
     }
   }
-  function pauseAudio(){ audio.pause(); isPlaying = false; updatePlayUI(); }
+
+  function pauseAudio(){
+    audio.pause();
+    isPlaying = false;
+    setIOSPlaybackState('paused');
+    updateIOSMediaPosition();
+    updatePlayUI();
+  }
   function togglePlay(){ if(!audio.src) return; isPlaying ? pauseAudio() : playAudio(); }
 
   function updatePlayUI(){
@@ -1230,6 +1412,7 @@ const MUSIC_LIBRARY = [
   }
 
   audio.addEventListener('timeupdate', () => {
+    if(!isSeeking) updateIOSMediaPosition();
     if(isSeeking || !audio.duration) return;
     const pct = (audio.currentTime / audio.duration) * 100;
     progressFill.style.width = pct + '%'; progressThumb.style.left = pct + '%';
@@ -1242,6 +1425,23 @@ const MUSIC_LIBRARY = [
   audio.addEventListener('loadedmetadata', () => {
     durationTimeEl.textContent = formatTime(audio.duration);
     ppDurationTime.textContent = formatTime(audio.duration);
+    updateIOSMediaPosition();
+  });
+
+  audio.addEventListener('play', () => {
+    isPlaying = true;
+    setIOSPlaybackState('playing');
+    updatePlayUI();
+  });
+
+  audio.addEventListener('pause', () => {
+    isPlaying = false;
+    setIOSPlaybackState('paused');
+    updatePlayUI();
+  });
+
+  audio.addEventListener('ratechange', () => {
+    updateIOSMediaPosition();
   });
 
   audio.addEventListener('ended', () => {
