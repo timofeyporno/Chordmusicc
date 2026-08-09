@@ -699,20 +699,13 @@ const MUSIC_LIBRARY = [
     ]
   },
   {
-    playlistName: "в моих легких выросли цветы",
-    tracksFolder: "cupsize/alb4/",
+    playlistName: "Чилл",
+    tracksFolder: "chill/",
     coverUrl: "",
     tracks: [
-      { file: "song1.mp3" },
-      { file: "song2.mp3" },
-      { file: "song3.mp3" },
-      { file: "song4.mp3" },
-      { file: "song5.mp3" },
-      { file: "song6.mp3" },
-      { file: "song7.mp3" },
-      { file: "song8.mp3" },
-      { file: "song9.mp3" },
-      { file: "song10.mp3" }
+      { file: "track1.mp3" },
+      { file: "track2.mp3" },
+      { file: "track3.mp3" }
     ]
   }
 ];
@@ -866,9 +859,125 @@ const MUSIC_LIBRARY = [
   }
   function escapeAttr(str){ return escapeHtml(str).replace(/"/g,'&quot;'); }
 
+  /* ======================= OFFLINE CACHE ======================= */
+  // Встроенные треки автоматически сохраняются в Cache Storage.
+  // После первого открытия сайта их можно слушать без интернета.
+  const OFFLINE_AUDIO_CACHE = 'chordmusic-audio-v1';
+  const offlineObjectUrls = new Map();
+  const offlineCaching = new Map();
+
+  function canUseOfflineCache(){
+    return typeof window !== 'undefined' && 'caches' in window && location.protocol !== 'file:';
+  }
+
+  function absoluteTrackUrl(src){
+    try { return new URL(src, location.href).href; }
+    catch(e){ return src; }
+  }
+
+  async function cacheBuiltInTrack(track){
+    if(!track || track.isLocal || !track.src || !canUseOfflineCache()) return false;
+    const url = absoluteTrackUrl(track.src);
+    if(offlineCaching.has(url)) return offlineCaching.get(url);
+
+    const job = (async () => {
+      try {
+        const cache = await caches.open(OFFLINE_AUDIO_CACHE);
+        const existing = await cache.match(url);
+        if(existing) return true;
+
+        const response = await fetch(url, { cache: 'no-cache' });
+        if(!response.ok) return false;
+
+        await cache.put(url, response.clone());
+        return true;
+      } catch(err){
+        console.warn('Не удалось сохранить трек для офлайн:', url, err);
+        return false;
+      }
+    })();
+
+    offlineCaching.set(url, job);
+    return job;
+  }
+
+  async function getOfflineAudioUrl(src){
+    if(!src || !canUseOfflineCache()) return null;
+    const url = absoluteTrackUrl(src);
+
+    try {
+      const cache = await caches.open(OFFLINE_AUDIO_CACHE);
+      const response = await cache.match(url);
+      if(!response) return null;
+
+      if(offlineObjectUrls.has(url)) return offlineObjectUrls.get(url);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      offlineObjectUrls.set(url, blobUrl);
+      return blobUrl;
+    } catch(err){
+      console.warn('Не удалось получить офлайн-трек:', url, err);
+      return null;
+    }
+  }
+
+  async function cacheAllBuiltInTracks(){
+    if(!canUseOfflineCache()) return;
+    const tracks = library.flatMap(pl => pl.tracks || []);
+    // Не блокируем интерфейс: скачивание идёт в фоне.
+    for(const track of tracks){
+      cacheBuiltInTrack(track);
+    }
+  }
+
+  async function prepareTrackSource(track){
+    // Сначала используем уже сохранённую копию.
+    const cachedUrl = await getOfflineAudioUrl(track.src);
+    if(cachedUrl) return cachedUrl;
+
+    // Если копии нет — обычный URL. Одновременно ставим его в офлайн-кэш.
+    cacheBuiltInTrack(track);
+    return track.src;
+  }
+
   /* ======================= ПОСТРОЕНИЕ ВНУТРЕННЕЙ БИБЛИОТЕКИ ======================= */
   let library = MUSIC_LIBRARY.map((pl, i) => buildPlaylist(pl, 'lib-' + i));
-  let localPlaylist = null; // создаётся при добавлении своих файлов
+  const LOCAL_SC_KEY = 'chordmusic-soundcloud-tracks-v1';
+
+  function loadSavedSoundCloudTracks(){
+    try{
+      const raw = localStorage.getItem(LOCAL_SC_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    }catch(e){ return []; }
+  }
+
+  function saveSoundCloudTracks(){
+    if(!localPlaylist) return;
+    try{
+      const tracks = localPlaylist.tracks.filter(t => t.isSoundCloud).map(t => ({
+        isSoundCloud: true,
+        soundCloudUrl: t.soundCloudUrl,
+        title: t.title,
+        artist: t.artist,
+        coverUrl: t.coverUrl || ''
+      }));
+      localStorage.setItem(LOCAL_SC_KEY, JSON.stringify(tracks));
+    }catch(e){ console.warn('Не удалось сохранить SoundCloud библиотеку:', e); }
+  }
+
+  let localPlaylist = {
+    id:'local-files',
+    playlistName:'Локальные файлы',
+    coverUrl:null,
+    isLocal:true,
+    tracks: loadSavedSoundCloudTracks()
+  };
+
+  localPlaylist.tracks.forEach(t => {
+    t.src = '';
+  });
+  if(localPlaylist.tracks.length === 0) localPlaylist = null;
 
   function buildPlaylist(pl, id){
     const built = {
@@ -1410,6 +1519,19 @@ const MUSIC_LIBRARY = [
     setCoverEverywhere(artwork || '');
     setTextEverywhere(title, artist, 'SoundCloud');
     document.body.classList.add('has-track');
+
+    // Обновляем запись в локальной библиотеке, если этот SoundCloud-трек уже сохранён.
+    if(localPlaylist && soundCloudUrl){
+      const saved = localPlaylist.tracks.find(t => t.isSoundCloud && t.soundCloudUrl === soundCloudUrl);
+      if(saved){
+        saved.title = title;
+        saved.artist = artist;
+        saved.coverUrl = artwork || saved.coverUrl || null;
+        saveSoundCloudTracks();
+        renderHomeGrid();
+        renderLibraryPanel();
+      }
+    }
     if(hasIOSMediaSession()){
       try{
         navigator.mediaSession.metadata = new MediaMetadata({
@@ -1429,6 +1551,11 @@ const MUSIC_LIBRARY = [
     destroySoundCloudWidget();
     soundCloudMode = true;
     soundCloudUrl = url;
+    const savedSC = localPlaylist && localPlaylist.tracks.find(t => t.isSoundCloud && t.soundCloudUrl === url);
+    if(savedSC){
+      currentPlaylistId = localPlaylist.id;
+      currentIndex = localPlaylist.tracks.indexOf(savedSC);
+    }
     setSoundCloudStatus('Подключаю трек…');
 
     const iframe = document.createElement('iframe');
@@ -1481,12 +1608,40 @@ const MUSIC_LIBRARY = [
     });
   }
 
+  function addSoundCloudToLocalLibrary(url){
+    if(!localPlaylist){
+      localPlaylist = { id:'local-files', playlistName:'Локальные файлы', coverUrl:null, isLocal:true, tracks:[] };
+    }
+
+    const existing = localPlaylist.tracks.find(t => t.isSoundCloud && t.soundCloudUrl === url);
+    if(existing){
+      setSoundCloudStatus('Трек уже есть в «Локальные файлы».');
+      return existing;
+    }
+
+    const track = {
+      isSoundCloud: true,
+      soundCloudUrl: url,
+      title: 'SoundCloud track',
+      artist: 'SoundCloud',
+      coverUrl: null,
+      src: ''
+    };
+    localPlaylist.tracks.push(track);
+    saveSoundCloudTracks();
+    renderHomeGrid();
+    renderLibraryPanel();
+    return track;
+  }
+
   function loadSoundCloudFromInput(){
     const url = soundcloudUrlInput.value.trim();
     if(!isSoundCloudUrl(url)){
       setSoundCloudStatus('Вставь обычную ссылку на трек SoundCloud.', true);
       return;
     }
+
+    addSoundCloudToLocalLibrary(url);
     setupSoundCloudWidget(url, true);
   }
 
@@ -1496,23 +1651,34 @@ const MUSIC_LIBRARY = [
   });
 
   /* ======================= ВОСПРОИЗВЕДЕНИЕ ======================= */
-  function playTrackInPlaylist(playlistId, index){
-    if(soundCloudMode) destroySoundCloudWidget();
+  async function playTrackInPlaylist(playlistId, index){
     const pl = getPlaylistById(playlistId);
     if(!pl || !pl.tracks[index]) return;
+    const track = pl.tracks[index];
+
     currentPlaylistId = playlistId;
     currentIndex = index;
-    loadCurrentTrack();
+
+    if(track.isSoundCloud){
+      setupSoundCloudWidget(track.soundCloudUrl, true);
+      renderLibraryPanel();
+      return;
+    }
+
+    if(soundCloudMode) destroySoundCloudWidget();
+    await loadCurrentTrack();
     playAudio();
   }
 
-  function loadCurrentTrack(){
+  async function loadCurrentTrack(){
     const pl = getPlaylistById(currentPlaylistId);
-    if(!pl) return;
+    if(!pl) return false;
     const track = pl.tracks[currentIndex];
-    if(!track) return;
+    if(!track) return false;
 
-    audio.src = track.src;
+    // Для встроенных треков сначала пробуем офлайн-копию.
+    audio.src = await prepareTrackSource(track);
+    audio.load();
     document.body.classList.add('has-track');
 
     // обложка/название/исполнитель — обновляем везде (обложка трека приоритетнее обложки плейлиста)
@@ -1524,6 +1690,7 @@ const MUSIC_LIBRARY = [
 
     renderLibraryPanel();
     resetProgressEverywhere();
+    return true;
   }
 
   function setCoverEverywhere(url){
@@ -1628,7 +1795,7 @@ const MUSIC_LIBRARY = [
     return pl ? pl.tracks : [];
   }
 
-  function playNext(userTriggered){
+  async function playNext(userTriggered){
     if(soundCloudMode){
       if(soundCloudWidget && soundCloudReady && userTriggered){
         setSoundCloudStatus('Для ссылки SoundCloud доступен один трек.');
@@ -1647,18 +1814,18 @@ const MUSIC_LIBRARY = [
         nextIndex = 0;
         if(!userTriggered && repeatMode !== 1){
           currentIndex = nextIndex;
-          loadCurrentTrack();
+          await loadCurrentTrack();
           pauseAudio();
           return;
         }
       }
     }
     currentIndex = nextIndex;
-    loadCurrentTrack();
+    await loadCurrentTrack();
     playAudio();
   }
 
-  function playPrev(){
+  async function playPrev(){
     if(soundCloudMode){
       if(soundCloudWidget && soundCloudReady){ soundCloudWidget.seekTo(0); soundCloudWidget.play(); }
       return;
@@ -1669,7 +1836,7 @@ const MUSIC_LIBRARY = [
     let prevIndex = currentIndex - 1;
     if(prevIndex < 0) prevIndex = queue.length - 1;
     currentIndex = prevIndex;
-    loadCurrentTrack();
+    await loadCurrentTrack();
     playAudio();
   }
 
@@ -1886,6 +2053,10 @@ const MUSIC_LIBRARY = [
   renderLibraryPanel();
   renderHomeGrid();
   updatePlayUI();
+
+  // Автоматически скачиваем все встроенные треки в офлайн-кэш после открытия сайта.
+  // Они не требуют ручного нажатия на "Скачать".
+  setTimeout(cacheAllBuiltInTracks, 300);
 
 })();
 </script>
